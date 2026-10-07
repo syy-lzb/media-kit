@@ -43,6 +43,48 @@ void main() {
     expect(checkedArchivePath('lib/./arm64/libmpv.so'), 'lib/arm64/libmpv.so');
   });
 
+  test('7-Zip explicit path takes priority over PATH', () async {
+    final explicit = await File(p.join(temp.path, 'explicit.exe')).create();
+    await File(p.join(temp.path, '7z.exe')).create();
+    expect(findSevenZip({'MEDIA_KIT_7ZIP': explicit.path, 'PATH': temp.path}),
+        explicit.path);
+  });
+
+  test('7-Zip searches quoted PATH entries before installation locations',
+      () async {
+    final tool = await File(p.join(temp.path, '7z.exe')).create();
+    final installed = await Directory(p.join(temp.path, '7-Zip')).create();
+    await File(p.join(installed.path, '7z.exe')).create();
+    expect(findSevenZip({'PATH': '"${temp.path}"', 'ProgramFiles': temp.path}),
+        tool.path);
+  });
+
+  test('7-Zip discovers 7zz.exe and skips missing explicit paths', () async {
+    final tool = await File(p.join(temp.path, '7zz.exe')).create();
+    expect(findSevenZip({
+      'MEDIA_KIT_7ZIP': p.join(temp.path, 'missing.exe'),
+      'PATH': temp.path,
+    }), tool.path);
+  });
+
+  test('7-Zip discovers a common installation outside PATH', () async {
+    final installed = await Directory(p.join(temp.path, '7-Zip')).create();
+    final tool = await File(p.join(installed.path, '7z.exe')).create();
+    expect(findSevenZip({'ProgramFiles': temp.path}), tool.path);
+  });
+
+  test('7-Zip missing tool reports installation and configuration guidance', () {
+    expect(() => findSevenZip({
+      'PATH': temp.path,
+      'ProgramFiles': temp.path,
+      'ProgramW6432': temp.path,
+      'ProgramFiles(x86)': temp.path,
+    }), throwsA(isA<StateError>().having(
+      (error) => error.message, 'guidance',
+      allOf(contains('7-Zip'), contains('PATH'), contains('MEDIA_KIT_7ZIP')),
+    )));
+  });
+
   test(
     'cache repairs modified extracted binaries from its verified archive',
     () async {

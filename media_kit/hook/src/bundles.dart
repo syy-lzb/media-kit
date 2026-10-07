@@ -7,6 +7,34 @@ import 'package:path/path.dart' as p;
 
 import 'process.dart';
 
+String findSevenZip(Map<String, String> environment) {
+  String unquote(String value) => value.trim().replaceAll(RegExp(r'^"|"$'), '');
+  final explicit = unquote(environment['MEDIA_KIT_7ZIP'] ?? '');
+  if (explicit.isNotEmpty && File(explicit).existsSync()) return explicit;
+
+  for (final entry in (environment['PATH'] ?? '').split(';')) {
+    final directory = unquote(entry);
+    if (directory.isEmpty) continue;
+    for (final name in ['7z.exe', '7zz.exe']) {
+      final candidate = p.join(directory, name);
+      if (File(candidate).existsSync()) return candidate;
+    }
+  }
+  for (final directory in [
+    environment['ProgramW6432'],
+    environment['ProgramFiles'],
+    environment['ProgramFiles(x86)'],
+  ]) {
+    if (directory == null || directory.trim().isEmpty) continue;
+    final candidate = p.join(unquote(directory), '7-Zip', '7z.exe');
+    if (File(candidate).existsSync()) return candidate;
+  }
+  throw StateError(
+    'Windows .7z media bundles require 7-Zip. Install 7-Zip and add '
+    '7z.exe or 7zz.exe to PATH, or set MEDIA_KIT_7ZIP to its executable path.',
+  );
+}
+
 final class Bundle {
   Bundle(String target, Map<String, dynamic> json)
     : url = Uri.parse(json['url'] as String),
@@ -189,7 +217,26 @@ Future<void> extractBundle(
   if (format != '7z' && format != 'tar.gz') {
     throw UnsupportedError('Unsupported native archive format: $format');
   }
-  // Windows ships bsdtar (including 7z support). Apple/Linux use tar for gzip.
+  if (Platform.isWindows && format == '7z') {
+    final sevenZip = findSevenZip(Platform.environment);
+    final listing = await runNativeTool(sevenZip, ['l', '-slt', archive.path]);
+    for (final line in const LineSplitter().convert(listing)) {
+      if (!line.startsWith('Path = ')) continue;
+      final name = line.substring('Path = '.length);
+      if (name.isEmpty || p.normalize(name) == p.normalize(archive.path)) {
+        continue;
+      }
+      checkedArchivePath(name);
+    }
+    await runNativeTool(sevenZip, [
+      'x',
+      '-y',
+      '-o${destination.path}',
+      archive.path,
+    ]);
+    return;
+  }
+  // Apple/Linux and Windows tar.gz extraction.
   final listing = await runNativeTool('tar', ['-tf', archive.path]);
   for (final name in const LineSplitter().convert(listing)) {
     checkedArchivePath(name);
